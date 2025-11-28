@@ -10,12 +10,17 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.pipeline import FeatureUnion
 from review_features import ReviewFeatureExtractor
 import joblib
+from sklearn.svm import LinearSVC
+from datetime import datetime
+import matplotlib.pyplot as plt
+
 
 DATASET_PATH = os.path.join("data", "fake_reviews.csv")
 MODEL_OUTPUT_DIR = "models"
 
 LOGREG_MODEL_FILE = os.path.join(MODEL_OUTPUT_DIR, "logreg_pipeline.joblib")
 ANN_MODEL_FILE = os.path.join(MODEL_OUTPUT_DIR, "ann_pipeline.joblib")
+SVM_MODEL_FILE = os.path.join(MODEL_OUTPUT_DIR, "svm_pipeline.joblib")
 
 
 def load_dataset(csv_path: str):
@@ -81,6 +86,17 @@ def build_ann_pipeline():
         )),
     ])
 
+def build_linear_svm_pipeline():
+    #tf- idf + linear svm model
+    return Pipeline([
+        ("vectorizer", TfidfVectorizer(
+            max_features=30000,
+            ngram_range=(1,2),
+            stop_words="english",
+        )),
+        ("classifier", LinearSVC()),
+    ])
+
 def build_logreg_with_review_features():
     
     text_branch = Pipeline([
@@ -128,6 +144,107 @@ def evaluate_model(model_name, trained_pipeline, X_test, y_test):
 
     print(classification_report(y_test, predicted_labels))
 
+
+#computes metrics for a model and returns a flat dict (so we can log to csv, it doesnt print anything)
+def collect_metrics_for_model(model_name, trained_pipeline, X_test, y_test, class_names):
+    y_pred = trained_pipeline.predict(X_test)
+
+    #try to get some score for roc-auc
+    scores = None
+    if hasattr(trained_pipeline, "predict_proba"):
+        try:
+            proba = trained_pipeline.predict_proba(X_test)
+            scores = proba[:,1] #positive class score
+        except Exception:
+            scores = None
+    elif hasattr(trained_pipeline, "decision_function"):
+        try:
+            scores = trained_pipeline.decision_function(X_test)
+        except Exception:
+            scores = None
+    
+    #roc auc if possinle
+    auc_score = None
+    if scores is not None:
+        try:
+            auc_score = roc_auc_score(y_test, scores)
+        except Exception:
+            auc_score = None
+    
+    #dict classification report for log
+    report_dict = classification_report(y_test, y_pred, target_names=class_names, output_dict=True)
+
+    metrics_entry = {
+        "timestamp": datetime.now().isoformat(timespec='seconds'),
+        "model": model_name,
+        "accuracy": report_dict["accuracy"],
+        "roc_auc": auc_score,
+        f"precision_{class_names[0]}": report_dict[class_names[0]]['precision'],
+        f"recall_{class_names[0]}": report_dict[class_names[0]]['recall'],
+        f"f1_{class_names[0]}": report_dict[class_names[0]]['f1-score'],
+        f"precision_{class_names[1]}": report_dict[class_names[1]]['precision'],
+        f"recall_{class_names[1]}": report_dict[class_names[1]]['recall'],
+        f"f1_{class_names[1]}": report_dict[class_names[1]]['f1-score'],
+    }
+    return metrics_entry
+
+#appending a list of metrics to a csv file 
+def save_metrics_history(metrics_list, output_dir="results", filename="metrics_history.csv"):
+    if not metrics_list:
+        return
+    os.makedirs(output_dir, exist_ok=True)
+    csv_path = os.path.join(output_dir, filename)
+
+    df = pd.DataFrame(metrics_list)
+
+    if os.path.exists(csv_path):
+        df.to_csv(csv_path, mode='a', header=False, index=False)
+    else:
+        df.to_csv(csv_path, index=False)
+    
+    print(f"\nSaved metrics for {len(metrics_list)} models to {csv_path}")
+
+
+def save_plots_for_run(metrics_list, output_dir="results/plots"):
+    #create and save accuracy and ROC-AUC plots for this run only
+    #saves two png files
+    if not metrics_list:
+        return
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    #convert to df
+    df = pd.DataFrame(metrics_list)
+
+    #unique timestamp for each run
+    ts = df.iloc[0]["timestamp"].replace(":", "-")
+
+    #accuracy plot
+    plt.figure()
+    plt.bar(df["model"], df["accuracy"])
+    plt.title(f"Accuracy per Model (Run {ts})")
+    plt.ylabel("Accuracy")
+    plt.xticks(rotation=45, ha="right")
+    acc_path = os.path.join(output_dir, f"accuracy_run_{ts}.png")
+    plt.tight_layout()
+    plt.savefig(acc_path)
+    plt.close()
+
+    # roc auc plot
+    if "roc_auc" in df.columns:
+        plt.figure()
+        plt.bar(df["model"], df["roc_auc"])
+        plt.title(f"ROC-AUC per Model (Run {ts})")
+        plt.ylabel("ROC-AUC")
+        plt.xticks(rotation=45, ha="right")
+        auc_path = os.path.join(output_dir, f"roc_auc_run_{ts}.png")
+        plt.tight_layout()
+        plt.savefig(auc_path)
+        plt.close()
+
+    print(f"Saved run plots to {output_dir}")
+
+
 def main():
     os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
 
@@ -136,6 +253,9 @@ def main():
 
     print("Encoding labels...")
     numeric_labels, label_encoder = encode_labels_as_numbers(raw_labels)
+
+    class_names = list(label_encoder.classes_)
+    metrics_history = []
 
     print("Splitting data into train/test...")
     text_train, text_test, y_train, y_test = train_test_split(
@@ -152,6 +272,10 @@ def main():
     logreg_pipeline.fit(text_train, y_train)
     evaluate_model("Logistic Regression", logreg_pipeline, text_test, y_test)
 
+    metrics_history.append(
+        collect_metrics_for_model("Logistic Regression", logreg_pipeline, text_test, y_test, class_names)
+    )
+
     print("Saving Logistic Regression model...")
     joblib.dump(
         {"pipeline": logreg_pipeline, "label_encoder": label_encoder},
@@ -163,6 +287,10 @@ def main():
     ann_pipeline = build_ann_pipeline()
     ann_pipeline.fit(text_train, y_train)
     evaluate_model("ANN (MLPClassifier)", ann_pipeline, text_test, y_test)
+
+    metrics_history.append(
+        collect_metrics_for_model("ANN (MLPClassifier)", ann_pipeline, text_test, y_test, class_names)
+    )
 
     print("Saving ANN model...")
     joblib.dump(
@@ -182,6 +310,10 @@ def main():
         y_test
     )
 
+    metrics_history.append(
+        collect_metrics_for_model("Logistic Regression + Review Meta-Features", logreg_meta_pipeline, text_test, y_test, class_names)
+    )
+
     meta_model_path = os.path.join(MODEL_OUTPUT_DIR, "logreg_meta_pipeline.joblib")
     print("Saving LogReg + Meta-Features model to:", meta_model_path)
 
@@ -189,6 +321,29 @@ def main():
         {"pipeline": logreg_meta_pipeline, "label_encoder": label_encoder},
         meta_model_path
     )
+
+    # train linear svm
+    print("\nTraining Linear SVM model...")
+    svm_pipeline = build_linear_svm_pipeline()
+    svm_pipeline.fit(text_train, y_train)
+    evaluate_model("Linear SVM", svm_pipeline, text_test, y_test)
+
+    metrics_history.append(
+        collect_metrics_for_model("Linear SVM", svm_pipeline, text_test, y_test, class_names)
+    )
+
+    print("Saving Linear SVM model...")
+    joblib.dump(
+        {"pipeline": svm_pipeline, "label_encoder": label_encoder},
+        SVM_MODEL_FILE
+    )
+
+
+    #save all metrics for run
+    save_metrics_history(metrics_history)
+    #save all plots for run
+    save_plots_for_run(metrics_history)
+
 
     print("\nTraining complete. Models saved in:", MODEL_OUTPUT_DIR)
 
