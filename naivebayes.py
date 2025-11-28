@@ -40,7 +40,7 @@ def calc_probs(cg_tokens, or_tokens, cg_count, or_count):
 
 	cg_word_count =  sum(cg_tokens.values()) # total number of words
 	or_word_count = sum(or_tokens.values())
-
+	# using log probabilities to avoid underflow round to zero
 	prob_cg = math.log(cg_count / (cg_count + or_count))# probability of just being real or fake
 	prob_or = math.log(or_count / (cg_count + or_count))
 
@@ -86,6 +86,12 @@ def predict(text, prob_cg, prob_or, cg_probs, or_probs):
 		return "CG"
 	else:
 		return "OR"
+
+if __name__ == "__main__":
+	param = load_data(TRAIN_DATA_PATH)
+	probs = calc_probs(*param)
+	#text = "7/29/14 Update to my review.  The quality is good but the fit is a bit tight.  I wish I had ordered the black.  The black is a nice dark brown and the color is a little darker in the picture.  I wish I had ordered the white.  I love it.  I love the color and the fit.  I would definitely recommend this product.Very cute boots.  I love the color and they are very comfortable.These are so cute and fit perfect!  I'm going to order a second pair in different colors.  I'm 5'9"" and weigh 160 lbs.  These fit perfectly and are great quality!I love these socks. They fit my 5'6"" son perfectly and I can't imagine I would order a second pair in different colors. I wear a 9.5 and these fit him perfectly. I love the way the socks run and have been wearing them for a month.My daughter loves these shoes. She loves them. They fit well, they are very soft and comfortable. I wear them all the time.Love this shirt, very comfy, I ordered size up as needed. Its a little small in the"
+	#print(predict(text, *probs))
 
 
 
