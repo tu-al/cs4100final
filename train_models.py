@@ -13,23 +13,34 @@ import joblib
 from sklearn.svm import LinearSVC
 from datetime import datetime
 import matplotlib.pyplot as plt
+from length_weighted_logreg import build_length_weighted_logreg_pipeline
 
 
-DATASET_PATH = os.path.join("data", "fake_reviews.csv")
+
+HOTEL_DATASET_PATH = os.path.join("data", "hotel_reviews.csv")
+FAKE_DATASET_PATH  = os.path.join("data", "fake_reviews.csv")
 MODEL_OUTPUT_DIR = "models"
 
 LOGREG_MODEL_FILE = os.path.join(MODEL_OUTPUT_DIR, "logreg_pipeline.joblib")
 ANN_MODEL_FILE = os.path.join(MODEL_OUTPUT_DIR, "ann_pipeline.joblib")
 SVM_MODEL_FILE = os.path.join(MODEL_OUTPUT_DIR, "svm_pipeline.joblib")
+CUSTOM_LOGREG_MODEL_FILE = os.path.join(MODEL_OUTPUT_DIR, "length_weighted_logreg_pipeline.joblib")
+
 
 
 def load_dataset(csv_path: str):
     df = pd.read_csv(csv_path)
 
-    # Extract review text
-    review_texts = df["text_"].astype(str)
+    if "text_" in df.columns:
+        review_texts = df["text_"].astype(str)
+    elif "review" in df.columns:
+        review_texts = df["review"].astype(str)
+    else:
+        raise ValueError("Dataset missing text column")
 
-    # Convert raw labels ('CG', 'OR') → ('fake', 'real') note to change this or comment out if we are not using these.
+    if "label" not in df.columns:
+        raise ValueError("Dataset missing label column")
+
     human_label_map = {
         "CG": "fake",
         "OR": "real",
@@ -70,6 +81,7 @@ def build_logistic_regression_pipeline():
 
 #note this one is based off the function on the top, but I did type this completely manually.
 #as it may count as AI use since the first one needed AI help hence this note. 
+
 def build_ann_pipeline():
     return Pipeline([
         ("vectorizer", TfidfVectorizer(
@@ -78,11 +90,17 @@ def build_ann_pipeline():
             stop_words="english"
         )),
         ("classifier", MLPClassifier(
-            hidden_layer_sizes=(128,),
+            hidden_layer_sizes=(256, 128),  # 2 layers: 256 -> 128
             activation="relu",
             solver="adam",
-            max_iter=20,   # this can be modified
-            verbose=True
+            max_iter=80,          
+            alpha=1e-4, #note this line and the line below were limitations recommended by GPT as I encountered an overfitting problem
+            learning_rate_init=1e-3, 
+            batch_size=256,
+            early_stopping=True,
+            n_iter_no_change=5,
+            verbose=True,
+            random_state=42
         )),
     ])
 
@@ -248,8 +266,19 @@ def save_plots_for_run(metrics_list, output_dir="results/plots"):
 def main():
     os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
 
-    print("Loading dataset...")
-    raw_texts, raw_labels = load_dataset(DATASET_PATH)
+    print("Loading datasets...")
+
+    text1, labels1 = load_dataset("data/fake_reviews.csv")
+    text2, labels2 = load_dataset("data/hotel_reviews.csv")
+
+    # Merge datasets
+    raw_texts = pd.concat([text1, text2], ignore_index=True)
+    raw_labels = pd.concat([labels1, labels2], ignore_index=True)
+
+    print("Dataset sizes:")
+    print("  fake_reviews.csv:", len(text1))
+    print("  hotel_reviews.csv:", len(text2))
+    print("  TOTAL:", len(raw_texts))
 
     print("Encoding labels...")
     numeric_labels, label_encoder = encode_labels_as_numbers(raw_labels)
@@ -337,6 +366,42 @@ def main():
         {"pipeline": svm_pipeline, "label_encoder": label_encoder},
         SVM_MODEL_FILE
     )
+
+    # ---- Train Custom Length-Weighted Logistic Regression ----
+    print("\nTraining Length-Weighted Logistic Regression (Custom)...")
+
+    # Compute lengths for BOTH train + test
+    train_lengths = text_train.apply(lambda t: len(t.split()))
+    test_lengths  = text_test.apply(lambda t: len(t.split()))
+
+    custom_pipeline = build_length_weighted_logreg_pipeline()
+
+    # IMPORTANT: pass lengths manually
+    custom_pipeline.named_steps["classifier"].fit(
+        custom_pipeline.named_steps["vectorizer"].fit_transform(text_train),
+        y_train,
+        lengths=train_lengths
+    )
+
+    print("Evaluating Custom Logistic Regression...")
+    evaluate_model("Custom Length-Weighted LogReg", custom_pipeline, text_test, y_test)
+
+    metrics_history.append(
+        collect_metrics_for_model(
+            "Custom Length-Weighted LogReg",
+            custom_pipeline,
+            text_test,
+            y_test,
+            class_names
+        )
+    )
+
+    print("Saving Custom Logistic Regression model...")
+    joblib.dump(
+        {"pipeline": custom_pipeline, "label_encoder": label_encoder},
+        CUSTOM_LOGREG_MODEL_FILE
+    )
+
 
 
     #save all metrics for run
