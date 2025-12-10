@@ -10,7 +10,7 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.pipeline import FeatureUnion
 from review_features import ReviewFeatureExtractor
 import joblib
-from sklearn.svm import LinearSVC
+from custom_svm import CustomLinearSVM
 from datetime import datetime
 import matplotlib.pyplot as plt
 from length_weighted_logreg import build_length_weighted_logreg_pipeline
@@ -70,7 +70,8 @@ def build_logistic_regression_pipeline():
         ("vectorizer", TfidfVectorizer( # this mainly helps converting text to numbers
             max_features=30000,
             ngram_range=(1, 2),
-            stop_words="english" # helps ignore basic filler words
+            stop_words="english", # helps ignore basic filler words
+            norm="l2"
         )),
         ("classifier", LogisticRegression(
             max_iter=300,
@@ -87,7 +88,8 @@ def build_ann_pipeline():
         ("vectorizer", TfidfVectorizer(
             max_features=30000,
             ngram_range=(1, 2),
-            stop_words="english"
+            stop_words="english",
+            norm="l2"
         )),
         ("classifier", MLPClassifier(
             hidden_layer_sizes=(256, 128),  # 2 layers: 256 -> 128
@@ -105,14 +107,18 @@ def build_ann_pipeline():
     ])
 
 def build_linear_svm_pipeline():
-    #tf- idf + linear svm model
     return Pipeline([
         ("vectorizer", TfidfVectorizer(
-            max_features=30000,
+            max_features=5000,
             ngram_range=(1,2),
             stop_words="english",
+            norm="l2"
         )),
-        ("classifier", LinearSVC()),
+        ("classifier", CustomLinearSVM(
+            lr=0.0005,
+            C=1.0,
+            max_iter=200
+        )),
     ])
 
 def build_logreg_with_review_features():
