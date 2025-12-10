@@ -13,6 +13,9 @@ import joblib
 from custom_svm import CustomLinearSVM
 from datetime import datetime
 import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix, roc_curve, auc, precision_recall_curve
+import seaborn as sns
+
 
 
 DATASET_PATH = os.path.join("data", "fake_reviews.csv")
@@ -250,6 +253,67 @@ def save_plots_for_run(metrics_list, output_dir="results/plots"):
 
     print(f"Saved run plots to {output_dir}")
 
+def save_diagnostic_plots(model_name, pipeline, X_test, y_test, output_dir="results/diagnostics"):
+    os.makedirs(output_dir, exist_ok=True)
+
+    y_pred = pipeline.predict(X_test)
+    cm = confusion_matrix(y_test, y_pred)
+
+    plt.figure(figsize=(4, 3))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+                xticklabels=["fake", "real"],
+                yticklabels=["fake", "real"])
+    plt.title(f"confusion matrix: {model_name}")
+    plt.xlabel("predicted")
+    plt.ylabel("true")
+    cm_path = os.path.join(output_dir, f"{model_name}_confusion_matrix.png")
+    plt.tight_layout()
+    plt.savefig(cm_path)
+    plt.close()
+
+    roc_scores = None
+    if hasattr(pipeline, "predict_proba"):
+        try:
+            roc_scores = pipeline.predict_proba(X_test)[:, 1]
+        except:
+            pass
+    elif hasattr(pipeline, "decision_function"):
+        try:
+            roc_scores = pipeline.decision_function(X_test)
+        except:
+            pass
+
+    if roc_scores is not None:
+        fpr, tpr, _ = roc_curve(y_test, roc_scores)
+        roc_auc = auc(fpr, tpr)
+
+        plt.figure()
+        plt.plot(fpr, tpr, label=f"AUC = {roc_auc:.3f}")
+        plt.plot([0, 1], [0, 1], "k--")
+        plt.xlabel("false positive rate")
+        plt.ylabel("True positive rate")
+        plt.title(f"ROC Curve- {model_name}")
+        plt.legend()
+        roc_path = os.path.join(output_dir, f"{model_name}_roc_curve.png")
+        plt.tight_layout()
+        plt.savefig(roc_path)
+        plt.close()
+
+    if roc_scores is not None:
+        precision, recall, _ = precision_recall_curve(y_test, roc_scores)
+
+        plt.figure()
+        plt.plot(recall, precision)
+        plt.xlabel("recall")
+        plt.ylabel("precision")
+        plt.title(f"Precision-Recall Curve- {model_name}")
+        pr_path = os.path.join(output_dir, f"{model_name}_pr_curve.png")
+        plt.tight_layout()
+        plt.savefig(pr_path)
+        plt.close()
+
+    print(f"saved diagnostics for {model_name} in {output_dir}")
+
 
 def main():
     os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
@@ -281,6 +345,8 @@ def main():
     metrics_history.append(
         collect_metrics_for_model("Logistic Regression", logreg_pipeline, text_test, y_test, class_names)
     )
+    save_diagnostic_plots("Logistic Regression", logreg_pipeline, text_test, y_test)
+
 
     print("Saving Logistic Regression model...")
     joblib.dump(
@@ -297,6 +363,8 @@ def main():
     metrics_history.append(
         collect_metrics_for_model("ANN (MLPClassifier)", ann_pipeline, text_test, y_test, class_names)
     )
+    save_diagnostic_plots("ANN (MLPClassifier)", ann_pipeline, text_test, y_test)
+
 
     print("Saving ANN model...")
     joblib.dump(
@@ -319,6 +387,7 @@ def main():
     metrics_history.append(
         collect_metrics_for_model("Logistic Regression + Review Meta-Features", logreg_meta_pipeline, text_test, y_test, class_names)
     )
+    save_diagnostic_plots("Logistic Regression + Review Meta-Features", logreg_meta_pipeline, text_test, y_test)
 
     meta_model_path = os.path.join(MODEL_OUTPUT_DIR, "logreg_meta_pipeline.joblib")
     print("Saving LogReg + Meta-Features model to:", meta_model_path)
@@ -337,6 +406,8 @@ def main():
     metrics_history.append(
         collect_metrics_for_model("Linear SVM", svm_pipeline, text_test, y_test, class_names)
     )
+    save_diagnostic_plots("Linear SVM", svm_pipeline, text_test, y_test)
+
 
     print("Saving Linear SVM model...")
     joblib.dump(
